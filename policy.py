@@ -38,6 +38,7 @@ class NestingDNN(nn.Module):
         Returns:
             tuple: A tuple containing:
                 - action_mean (torch.Tensor): The predicted mean of the action distribution.
+                - action_stddevs (torch.Tensor): The predicted stddevs (from log_std).
                 - value (torch.Tensor): The predicted value estimate of the state.
         """
         # Pass the input through the feature extractor
@@ -49,15 +50,18 @@ class NestingDNN(nn.Module):
         # Get the value estimate from the critic head
         value = self.critic_head(features)
 
-        return action_mean, value
+        # Calculate stddevs from log_std (expand to batch size)
+        action_stddevs = torch.exp(self.log_std).expand_as(action_mean)
+
+        return action_mean, action_stddevs, value
 
     def get_action_and_value(self, x, action=None):
         """
         Returns the action sampled from the policy and the value estimate.
         Also calculates log probabilities and entropy if an action is provided.
         """
-        action_mean, value = self.forward(x)
-        std = torch.exp(self.log_std)
+        action_mean, action_stddevs, value = self.forward(x)
+        std = action_stddevs
         action_distribution = torch.distributions.Normal(action_mean, std)
 
         if action is None:
@@ -70,16 +74,29 @@ class NestingDNN(nn.Module):
 
         return action, log_prob, entropy, value
 
-    def evaluate_action(self, x, action):
+    def evaluate_action(self, states, actions):
         """
-        Evaluates the log probability and entropy of a given action under the current policy.
-        Used during the PPO update phase.
+        Evaluate actions given states.
+        Returns log_probs, entropy, and state_values.
         """
-        action_mean, value = self.forward(x)
-        std = torch.exp(self.log_std)
-        action_distribution = torch.distributions.Normal(action_mean, std)
+        # 액션 분포와 상태 가치 계산
+        action_means, action_stddevs, state_values = self.forward(states)
 
-        log_prob = action_distribution.log_prob(action).sum(dim=-1)
-        entropy = action_distribution.entropy().sum(dim=-1)
+        # 정규 분포 생성
+        normal_dist = torch.distributions.Normal(action_means, action_stddevs)
 
-        return log_prob, entropy, value
+        # 주어진 액션의 로그 확률 계산
+        log_probs = normal_dist.log_prob(actions)
+
+        # 로그 확률의 합을 계산 (액션 차원에 걸쳐)
+        # 일관된 차원을 위해 합계를 취하지 않고 원래 형태 유지
+        log_probs_sum = log_probs
+
+        # 엔트로피 계산
+        entropy = normal_dist.entropy()
+
+        # 차원 일관성 확인 및 수정
+        if log_probs_sum.dim() != actions.dim():
+            log_probs_sum = log_probs_sum.sum(-1)
+
+        return log_probs_sum, entropy, state_values
