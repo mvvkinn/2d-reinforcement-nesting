@@ -16,7 +16,7 @@ class NestingEnv(gym.Env):
     Uses polygon data as NumPy arrays/tensors with masks.
     """
     # Modified __init__ to accept heuristic_type string and step_size
-    def __init__(self, sheet_size=(400, 400), pieces_data=None, heuristic_type=None, heuristic_step_size=1.0, area_reward_scale=0.0001, distance_reward_scale=1.0, distance_threshold=20.0, distance_epsilon=1e-6, boundary_reward_scale=0.5):
+    def __init__(self, sheet_size=(400, 400), pieces_data=None, heuristic_type=None, heuristic_step_size=1.0, area_reward_scale=0.0001, distance_reward_scale=1.0, distance_threshold=20.0, distance_epsilon=1e-6, boundary_reward_scale=0.5, max_steps=100):  # 최대 스텝 수 매개변수 추가
         super(NestingEnv, self).__init__()
 
         self.sheet_size = sheet_size  # Size of the sheet (width, height)
@@ -69,6 +69,9 @@ class NestingEnv(gym.Env):
         # Store the last calculated heuristic placement for rendering
         self._last_heuristic_placement = np.array([-1.0, -1.0, 0.0]) # Store x, y, rotation (placeholder)
 
+        self.max_steps = max_steps  # 최대 스텝 수 저장
+        self.current_steps = 0  # 현재 스텝 카운터 초기화
+
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -80,6 +83,7 @@ class NestingEnv(gym.Env):
         self.episode_finished = False # New flag to indicate if all pieces have been processed in this episode
         self._last_action = np.array([0.0, 0.0, 0.0]) # Reset last action
         self._last_heuristic_placement = np.array([-1.0, -1.0, 0.0]) # Reset last heuristic placement
+        self.current_steps = 0  # 스텝 카운터 초기화
 
 
         observation = self._get_observation()
@@ -152,8 +156,8 @@ class NestingEnv(gym.Env):
         else:
             # Collision or out of bounds detected. Attempt heuristic placement.
             # Use the heuristic_type specified in __init__
-            heuristic_x, heuristic_y = self._find_heuristic_placement(step_size=self.heuristic_step_size)
-            print(f"colision or out of bounds detected, new heuristic location ({heuristic_x}, {heuristic_y})")
+            heuristic_x, heuristic_y = self._find_heuristic_placement(step_size=self.heuristic_step_size, heuristic_type='bl')
+            # print(f"colision or out of bounds detected, new heuristic location ({heuristic_x}, {heuristic_y})")
             
             # Check if heuristic found a valid placement (heuristic_x, heuristic_y not -1.0, -1.0)
             if heuristic_x > -1.0 or heuristic_y > -1.0:
@@ -194,7 +198,7 @@ class NestingEnv(gym.Env):
                       heuristic_out_of_bounds = self._check_bounds(heuristic_placed_padded_coords, heuristic_placed_padded_mask)
             
                       if not heuristic_collided and not heuristic_out_of_bounds:
-                          print(f"heuristic not collided or not out of bounds")
+                          print(f"colision or out of bounds detected, new heuristic location ({heuristic_x}, {heuristic_y})")
                           # Heuristic placement is valid. Place the piece there.
                           self.placed_pieces_coords.append(heuristic_placed_padded_coords)
                           self.placed_pieces_masks.append(heuristic_placed_padded_mask)
@@ -220,6 +224,13 @@ class NestingEnv(gym.Env):
         info["placed_pieces_count"] = len(self.placed_pieces_coords)
 
 
+        # 스텝 카운터 증가
+        self.current_steps += 1
+
+        # 스텝 수 제한에 도달했는지 확인
+        if self.current_steps >= self.max_steps:
+            truncated = True
+
         return observation, reward, terminated, truncated, info
 
     def _get_observation(self):
@@ -230,7 +241,7 @@ class NestingEnv(gym.Env):
             # Calculate heuristic placement
             # Use the stored heuristic_type and heuristic_step_size
             # _find_heuristic_placement currently returns x, y
-            heuristic_x, heuristic_y = self._find_heuristic_placement(step_size=self.heuristic_step_size)
+            heuristic_x, heuristic_y = self._find_heuristic_placement(step_size=self.heuristic_step_size, heuristic_type=self.heuristic_type)
 
             # Store the calculated heuristic placement for rendering
             # Assuming heuristic doesn't provide rotation, store 0.0 for rotation
@@ -397,7 +408,7 @@ class NestingEnv(gym.Env):
         return reward
 
     # Modified _find_heuristic_placement to use self.heuristic_type string
-    def _find_heuristic_placement(self, step_size: float = 1.0) -> Tuple[float, float]:
+    def _find_heuristic_placement(self, step_size: float = 1.0, heuristic_type = None) -> Tuple[float, float]:
         """
         Finds a placement for the current piece using the specified heuristic type.
         Returns the found placement (x, y) or (-1.0, -1.0) if no placement found.
@@ -423,7 +434,7 @@ class NestingEnv(gym.Env):
         ]
 
 
-        if self.heuristic_type == 'bl':
+        if heuristic_type == 'bl':
              # Call the TorchScript find_bl_placement function
              # find_bl_placement expects batch size 1 for the current piece
              # It expects lists of tensors for placed pieces
@@ -433,7 +444,7 @@ class NestingEnv(gym.Env):
                  self.sheet_size, step_size=step_size
              )
              return x.item(), y.item() # Return as float
-        elif self.heuristic_type == 'nfp':
+        elif heuristic_type == 'nfp':
              # Call the TorchScript find_nfp_placement function
              # find_nfp_placement expects batch size 1 for the current piece
              # It expects lists of tensors for placed pieces
