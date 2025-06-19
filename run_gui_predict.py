@@ -256,7 +256,7 @@ class NestingPredictor(QWidget):
 
 def main():
     # 기존 checkpoint_path 수정
-    checkpoint_path = "./models/checkpoint_episode_500.pth"  # 최신 모델 중 하나를 선택
+    checkpoint_path = ("./models/checkpoint_episode.pth")  # 최신 모델 중 하나를 선택
 
     import joblib
     from sklearn.preprocessing import StandardScaler
